@@ -166,6 +166,68 @@ def _analyze_feed_cards(page: Page) -> list[dict]:
     return cards
 
 
+# ========== 相关性预筛选 ==========
+
+
+def _is_card_relevant(card: dict, relevance_terms: list[str]) -> bool:
+    """判断卡片标题是否与搜索意图相关。
+
+    Args:
+        card: 卡片信息字典（含 title 字段）。
+        relevance_terms: 相关性关键词列表。标题中包含任意一个即为相关。
+
+    Returns:
+        True 如果相关或无法判断（标题为空/无筛选词），False 如果明显不相关。
+    """
+    if not relevance_terms:
+        return True  # 未提供筛选词，不过滤
+
+    title = card.get("title", "").strip().lower()
+    if not title:
+        return True  # 标题为空，无法判断，放行
+
+    for term in relevance_terms:
+        if term.lower() in title:
+            return True
+
+    return False
+
+
+def _filter_relevant_cards(
+    cards: list[dict],
+    relevance_terms: list[str],
+) -> tuple[list[dict], list[dict]]:
+    """按相关性筛选卡片。
+
+    Args:
+        cards: 按顺序排列的卡片列表。
+        relevance_terms: 相关性关键词列表。
+
+    Returns:
+        (relevant, skipped) 两个列表。
+    """
+    if not relevance_terms:
+        return cards, []
+
+    relevant = []
+    skipped = []
+    for card in cards:
+        if _is_card_relevant(card, relevance_terms):
+            relevant.append(card)
+        else:
+            skipped.append(card)
+
+    logger.info(
+        "相关性筛选: %d 相关 / %d 跳过 (共 %d)",
+        len(relevant), len(skipped), len(cards),
+    )
+    if skipped:
+        skipped_titles = [c.get("title", "?")[:20] for c in skipped[:5]]
+        logger.debug("跳过: %s%s", skipped_titles, "..." if len(skipped) > 5 else "")
+
+    return relevant, skipped
+
+
 # ========== 详情页交互与信息提取 ==========
 
 
@@ -311,9 +373,10 @@ def browse_keyword(
     max_notes: int = 10,
     max_time: float = 300.0,
     on_note: callable = None,
+    relevance_terms: list[str] | None = None,
 ) -> list[dict]:
     """以人类节奏浏览单个关键词搜索结果。"""
-    return _browse_single(page, keyword, max_notes, max_time, on_note, screenshot_start=2)
+    return _browse_single(page, keyword, max_notes, max_time, on_note, screenshot_start=2, relevance_terms=relevance_terms)
 
 
 def browse_keywords(
@@ -323,6 +386,7 @@ def browse_keywords(
     max_notes_total: int = 15,
     max_time: float = 600.0,
     on_note: callable = None,
+    relevance_terms: list[str] | None = None,
 ) -> list[dict]:
     """以人类节奏浏览多个关键词的搜索结果（关键词泛化搜索）。
 
@@ -336,6 +400,7 @@ def browse_keywords(
         max_notes_total: 所有关键词总共最多浏览的笔记数。
         max_time: 总最大浏览时间（秒）。
         on_note: 回调函数。
+        relevance_terms: 相关性筛选词列表。卡片标题需包含至少一个词才会被浏览。
 
     Returns:
         去重后的浏览结果列表。
@@ -379,6 +444,13 @@ def browse_keywords(
         if not cards:
             logger.warning("关键词 '%s' 未找到结果", keyword)
             continue
+
+        # 相关性预筛选
+        if relevance_terms:
+            cards, skipped = _filter_relevant_cards(cards, relevance_terms)
+            if not cards:
+                logger.warning("关键词 '%s' 无相关卡片（跳过 %d 张）", keyword, len(skipped))
+                continue
 
         browsed_indices = set()
         notes_this_kw = 0
@@ -490,6 +562,7 @@ def _browse_single(
     max_time: float = 300.0,
     on_note: callable = None,
     screenshot_start: int = 2,
+    relevance_terms: list[str] | None = None,
 ) -> list[dict]:
     """单关键词浏览的内部实现。"""
     start_time = time.monotonic()
@@ -514,11 +587,18 @@ def _browse_single(
         logger.warning("未找到搜索结果卡片")
         return browsed_notes
 
+    # 相关性预筛选
+    if relevance_terms:
+        cards, skipped = _filter_relevant_cards(cards, relevance_terms)
+        if not cards:
+            logger.warning("无相关卡片（跳过 %d 张）", len(skipped))
+            return browsed_notes
+
     visible_cards = [c for c in cards if c.get("visible")]
     logger.info("可见卡片: %d/%d", len(visible_cards), len(cards))
 
     # ===== 第三步：按顺序浏览笔记 =====
-    card_queue = list(cards)  # 已按从左到右、从上到下排序
+    card_queue = list(cards)  # 已按从左到右、从上到下排序（已筛选）
     browsed_indices = set()
     screenshot_idx = 2
 
