@@ -75,6 +75,14 @@ metadata:
 
 5. **相关性预筛选**：浏览搜索结果时，先对卡片标题做关键词相关性检查，跳过明显不相关的推荐内容（小红书搜索结果会掺入大量无关推荐），通过 `--filter` 参数提供筛选词
 
+### 🎨 配图生成规则
+
+**所有 AI 生成配图必须使用 Gemini 2.5 Flash Image (nano banana) 模型。**
+
+- 模型：`gemini-2.5-flash-preview-image-generation`
+- 环境变量：`GEMINI_API_KEY`（必须），回退 `OPENAI_API_KEY`
+- 脚本：`scripts/image_gen.py` → `generate_images(prompts, output_dir)`
+
 ## 子技能概览
 
 ### xhs-auth — 认证管理
