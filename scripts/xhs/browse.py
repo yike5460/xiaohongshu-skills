@@ -312,26 +312,186 @@ def browse_keyword(
     max_time: float = 300.0,
     on_note: callable = None,
 ) -> list[dict]:
-    """以人类节奏浏览关键词搜索结果。
+    """以人类节奏浏览单个关键词搜索结果。"""
+    return _browse_single(page, keyword, max_notes, max_time, on_note, screenshot_start=2)
 
-    完整流程：
-    1. 通过搜索框 UI 输入关键词搜索（不使用 URL 跳转）
-    2. 分析页面 DOM 结构，获取卡片布局
-    3. 按从左到右、从上到下的顺序逐个打开笔记
-    4. 从详情弹窗提取完整信息（标题、正文、作者、互动数据等）
-    5. 截取详情页截图
-    6. 返回所有浏览结果
+
+def browse_keywords(
+    page: Page,
+    keywords: list[str],
+    max_notes_per_keyword: int = 5,
+    max_notes_total: int = 15,
+    max_time: float = 600.0,
+    on_note: callable = None,
+) -> list[dict]:
+    """以人类节奏浏览多个关键词的搜索结果（关键词泛化搜索）。
+
+    对每个关键词执行搜索并浏览，去重后汇总结果。
+    关键词之间模拟人类行为：返回首页 → 重新输入下一个关键词。
 
     Args:
         page: CDP 页面对象。
-        keyword: 搜索关键词。
-        max_notes: 最多浏览的笔记数量。
-        max_time: 最大浏览时间（秒）。
-        on_note: 每浏览一条笔记的回调 fn(index, info)。
+        keywords: 搜索关键词列表。
+        max_notes_per_keyword: 每个关键词最多浏览的笔记数。
+        max_notes_total: 所有关键词总共最多浏览的笔记数。
+        max_time: 总最大浏览时间（秒）。
+        on_note: 回调函数。
 
     Returns:
-        浏览过的笔记信息列表（含截图路径）。
+        去重后的浏览结果列表。
     """
+    start_time = time.monotonic()
+    all_notes = []
+    all_screenshots = []
+    seen_titles = set()
+    screenshot_idx = 2
+
+    # 清理旧截图
+    SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    for old in SCREENSHOT_DIR.glob("*.png"):
+        old.unlink(missing_ok=True)
+
+    for kw_idx, keyword in enumerate(keywords):
+        # 检查总限制
+        if len(all_notes) >= max_notes_total:
+            logger.info("达到总笔记数限制 %d", max_notes_total)
+            break
+        elapsed = time.monotonic() - start_time
+        if elapsed > max_time:
+            logger.info("达到总时间限制 %.0fs", elapsed)
+            break
+
+        remaining_total = max_notes_total - len(all_notes)
+        this_max = min(max_notes_per_keyword, remaining_total)
+
+        logger.info("=== 关键词 %d/%d: '%s' (目标 %d 条) ===", kw_idx + 1, len(keywords), keyword, this_max)
+
+        # 搜索
+        _search_via_ui(page, keyword)
+
+        # 截图搜索结果
+        ss = _take_screenshot(page, f"{screenshot_idx:02d}_search_{kw_idx}")
+        all_screenshots.append(ss)
+        screenshot_idx += 1
+
+        # 分析和浏览
+        cards = _analyze_feed_cards(page)
+        if not cards:
+            logger.warning("关键词 '%s' 未找到结果", keyword)
+            continue
+
+        browsed_indices = set()
+        notes_this_kw = 0
+
+        for card in cards:
+            if notes_this_kw >= this_max:
+                break
+            elapsed = time.monotonic() - start_time
+            if elapsed > max_time or len(all_notes) >= max_notes_total:
+                break
+            if card["index"] in browsed_indices:
+                continue
+
+            browsed_indices.add(card["index"])
+
+            # 去重：跳过已浏览过的标题
+            card_title = card.get("title", "").strip()
+            if card_title and card_title in seen_titles:
+                logger.debug("跳过重复笔记: %s", card_title[:30])
+                continue
+
+            # 滚动使卡片可见
+            if not card.get("visible"):
+                _smooth_scroll(page, random.randint(300, 500))
+                sleep_random(1000, 2000)
+
+            # 点击
+            logger.info("打开笔记 #%d: %s", card["index"], card_title[:30])
+            if not _click_card_by_position(page, card):
+                continue
+
+            sleep_random(1500, 2500)
+
+            # 提取详情
+            info = _extract_detail_info(page)
+            if not info:
+                info = {"title": card_title, "author": card.get("author", "")}
+
+            info["card_title"] = card_title
+            info["card_index"] = card["index"]
+            info["search_keyword"] = keyword
+
+            # 去重检查（详情标题）
+            detail_title = info.get("title", "").strip()
+            if detail_title and detail_title in seen_titles:
+                _close_detail(page)
+                sleep_random(500, 1000)
+                continue
+
+            # 记录已见标题
+            if card_title:
+                seen_titles.add(card_title)
+            if detail_title:
+                seen_titles.add(detail_title)
+
+            # 模拟阅读
+            for _ in range(random.randint(2, 5)):
+                _smooth_scroll(page, random.randint(150, 350))
+                sleep_random(800, 2500)
+
+            # 截图
+            ss = _take_screenshot(page, f"{screenshot_idx:02d}_detail_{kw_idx}_{card['index']}")
+            all_screenshots.append(ss)
+            info["screenshot"] = ss
+            screenshot_idx += 1
+
+            all_notes.append(info)
+            notes_this_kw += 1
+
+            logger.info(
+                "已浏览 %d (总 %d/%d): %s (by %s, 👍%s) [kw: %s]",
+                notes_this_kw, len(all_notes), max_notes_total,
+                (detail_title or card_title)[:30],
+                info.get("author", "?"),
+                info.get("likes", "?"),
+                keyword,
+            )
+
+            if on_note:
+                on_note(len(all_notes), info)
+
+            # 关闭详情
+            sleep_random(500, 1500)
+            _close_detail(page)
+            sleep_random(1000, 2500)
+
+        # 关键词之间等待（模拟思考下一次搜索）
+        if kw_idx < len(keywords) - 1:
+            logger.info("切换到下一个关键词，等待中...")
+            sleep_random(2000, 4000)
+
+    # 最终截图
+    ss = _take_screenshot(page, f"{screenshot_idx:02d}_final")
+    all_screenshots.append(ss)
+
+    elapsed = time.monotonic() - start_time
+    logger.info(
+        "多关键词浏览完成: %d 个关键词, %d 条笔记, %.0f 秒, %d 张截图",
+        len(keywords), len(all_notes), elapsed, len(all_screenshots),
+    )
+
+    return all_notes
+
+
+def _browse_single(
+    page: Page,
+    keyword: str,
+    max_notes: int = 10,
+    max_time: float = 300.0,
+    on_note: callable = None,
+    screenshot_start: int = 2,
+) -> list[dict]:
+    """单关键词浏览的内部实现。"""
     start_time = time.monotonic()
     browsed_notes = []
     screenshots = []

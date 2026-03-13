@@ -673,21 +673,35 @@ def cmd_user_profile(args: argparse.Namespace) -> None:
 
 
 def cmd_browse(args: argparse.Namespace) -> None:
-    """以人类节奏浏览搜索结果。"""
-    from xhs.browse import browse_keyword, SCREENSHOT_DIR
+    """以人类节奏浏览搜索结果（支持多关键词）。"""
+    from xhs.browse import browse_keyword, browse_keywords, SCREENSHOT_DIR
 
     browser, page = _connect(args)
     try:
-        notes = browse_keyword(
-            page,
-            keyword=args.keyword,
-            max_notes=args.max_notes,
-            max_time=args.max_time,
-        )
+        keywords = [k.strip() for k in args.keyword.split(",") if k.strip()]
+
+        if len(keywords) > 1:
+            # 多关键词模式
+            notes = browse_keywords(
+                page,
+                keywords=keywords,
+                max_notes_per_keyword=args.max_per_keyword,
+                max_notes_total=args.max_notes,
+                max_time=args.max_time,
+            )
+        else:
+            # 单关键词模式
+            notes = browse_keyword(
+                page,
+                keyword=keywords[0],
+                max_notes=args.max_notes,
+                max_time=args.max_time,
+            )
+
         screenshots = sorted([str(p) for p in SCREENSHOT_DIR.glob("*.png")])
         _output({
             "success": True,
-            "keyword": args.keyword,
+            "keywords": keywords,
             "browsed_count": len(notes),
             "screenshots": screenshots,
             "notes": notes,
@@ -1131,10 +1145,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub.set_defaults(func=cmd_search_feeds)
 
     # browse（人类化浏览）
-    sub = subparsers.add_parser("browse", help="以人类节奏浏览搜索结果")
-    sub.add_argument("--keyword", required=True, help="搜索关键词")
-    sub.add_argument("--max-notes", type=int, default=10, help="最多浏览笔记数 (default: 10)")
-    sub.add_argument("--max-time", type=float, default=300.0, help="最大浏览时间秒数 (default: 300)")
+    sub = subparsers.add_parser("browse", help="以人类节奏浏览搜索结果（支持多关键词）")
+    sub.add_argument("--keyword", required=True, help="搜索关键词（逗号分隔支持多个）")
+    sub.add_argument("--max-notes", type=int, default=10, help="最多浏览笔记总数 (default: 10)")
+    sub.add_argument("--max-per-keyword", type=int, default=5, help="每个关键词最多浏览数 (default: 5)")
+    sub.add_argument("--max-time", type=float, default=600.0, help="最大浏览时间秒数 (default: 600)")
     sub.set_defaults(func=cmd_browse)
 
     # get-feed-detail
