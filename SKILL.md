@@ -77,9 +77,9 @@ metadata:
 
 ### 🎨 配图生成规则
 
-**所有 AI 生成配图必须使用 Gemini 2.5 Flash Image (nano banana) 模型。**
+**所有 AI 生成配图必须使用 Gemini 3 Pro Image (Nano Banana Pro) 模型。**
 
-- 模型：`gemini-2.5-flash-preview-image-generation`
+- 模型：`gemini-3-pro-image-preview`
 - 环境变量：`GEMINI_API_KEY`（必须），回退 `OPENAI_API_KEY`
 - 脚本：`scripts/image_gen.py` → `generate_images(prompts, output_dir)`
 

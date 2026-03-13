@@ -31,9 +31,9 @@ metadata:
 
 ### 🎨 配图生成（强制规则）
 
-**所有需要 AI 生成配图的场景，必须使用 Gemini 2.5 Flash Image (nano banana) 模型。**
+**所有需要 AI 生成配图的场景，必须使用 Gemini 3 Pro Image (Nano Banana Pro) 模型。**
 
-- **默认模型**：`gemini-2.5-flash-preview-image-generation`（nano banana）
+- **默认模型**：`gemini-3-pro-image-preview`(Nano Banana Pro)
 - **回退模型**：仅当 `GEMINI_API_KEY` 环境变量不可用时，才回退到 OpenAI `gpt-image-1`
 - **生成脚本**：`scripts/image_gen.py` — `generate_images(prompts, output_dir)`
 - **环境变量**：优先使用 `GEMINI_API_KEY`，回退 `OPENAI_API_KEY`

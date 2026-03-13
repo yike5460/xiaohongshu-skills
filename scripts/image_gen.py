@@ -1,6 +1,6 @@
-"""图片生成工具 — 支持 Gemini Image Pro (nano banana) 和 OpenAI gpt-image-1。
+"""图片生成工具 — 支持 Gemini Image Pro (Gemini 3 Pro Image (Nano Banana Pro)) 和 OpenAI gpt-image-1。
 
-默认使用 Gemini 2.5 Flash Image (nano banana) 以获取最佳效果。
+默认使用 Gemini 3 Pro Image (Nano Banana Pro) 以获取最佳效果。
 回退到 OpenAI gpt-image-1（如果 Gemini API key 不可用）。
 
 环境变量：
@@ -20,8 +20,8 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Gemini nano banana 模型
-GEMINI_MODEL = "gemini-2.5-flash-preview-image-generation"
+# Gemini 3 Pro Image (Nano Banana Pro) — 最高质量
+GEMINI_MODEL = "gemini-3-pro-image-preview"
 GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
 # OpenAI 回退
@@ -35,7 +35,7 @@ def generate_images(
     prefix: str = "cover",
     size: str = "1024x1024",
 ) -> list[str]:
-    """生成图片，优先使用 Gemini nano banana。
+    """生成图片，优先使用 Gemini 3 Pro Image。
 
     Args:
         prompts: 图片描述列表。
@@ -53,7 +53,7 @@ def generate_images(
     openai_key = os.environ.get("OPENAI_API_KEY", "")
 
     if gemini_key:
-        logger.info("使用 Gemini 2.5 Flash Image (nano banana) 生成 %d 张图片", len(prompts))
+        logger.info("使用 Gemini 3 Pro Image (Nano Banana Pro) 生成 %d 张图片", len(prompts))
         return _generate_gemini(prompts, output_dir, prefix, gemini_key)
     elif openai_key:
         logger.warning("Gemini API key 不可用，回退到 OpenAI gpt-image-1")
@@ -68,11 +68,11 @@ def _generate_gemini(
     prefix: str,
     api_key: str,
 ) -> list[str]:
-    """使用 Gemini 2.5 Flash Image (nano banana) 生成图片。"""
+    """使用 Gemini 3 Pro Image (Nano Banana Pro) 生成图片。"""
     paths = []
 
     for i, prompt in enumerate(prompts):
-        logger.info("生成图片 %d/%d (Gemini nano banana)...", i + 1, len(prompts))
+        logger.info("生成图片 %d/%d (Gemini 3 Pro Image)...", i + 1, len(prompts))
 
         url = GEMINI_API_URL.format(model=GEMINI_MODEL) + f"?key={api_key}"
 
