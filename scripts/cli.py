@@ -672,6 +672,30 @@ def cmd_user_profile(args: argparse.Namespace) -> None:
         browser.close()
 
 
+def cmd_browse(args: argparse.Namespace) -> None:
+    """以人类节奏浏览搜索结果。"""
+    from xhs.browse import browse_keyword, SCREENSHOT_DIR
+
+    browser, page = _connect(args)
+    try:
+        notes = browse_keyword(
+            page,
+            keyword=args.keyword,
+            max_notes=args.max_notes,
+            max_time=args.max_time,
+        )
+        screenshots = sorted([str(p) for p in SCREENSHOT_DIR.glob("*.png")])
+        _output({
+            "success": True,
+            "keyword": args.keyword,
+            "browsed_count": len(notes),
+            "screenshots": screenshots,
+            "notes": notes,
+        })
+    finally:
+        browser.close()
+
+
 def cmd_post_comment(args: argparse.Namespace) -> None:
     """发表评论。"""
     from xhs.comment import post_comment
@@ -1105,6 +1129,13 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_argument("--search-scope", help="范围: 不限|已看过|未看过|已关注")
     sub.add_argument("--location", help="位置: 不限|同城|附近")
     sub.set_defaults(func=cmd_search_feeds)
+
+    # browse（人类化浏览）
+    sub = subparsers.add_parser("browse", help="以人类节奏浏览搜索结果")
+    sub.add_argument("--keyword", required=True, help="搜索关键词")
+    sub.add_argument("--max-notes", type=int, default=10, help="最多浏览笔记数 (default: 10)")
+    sub.add_argument("--max-time", type=float, default=300.0, help="最大浏览时间秒数 (default: 300)")
+    sub.set_defaults(func=cmd_browse)
 
     # get-feed-detail
     sub = subparsers.add_parser("get-feed-detail", help="获取 Feed 详情")

@@ -147,6 +147,16 @@ def launch_chrome(
     if headless:
         args.append("--headless=new")
 
+    # 服务器/虚拟显示环境额外参数
+    if platform.system() == "Linux":
+        args.extend([
+            "--no-sandbox",
+            "--disable-gpu",
+            "--disable-dev-shm-usage",
+            "--start-maximized",
+            "--window-size=1920,1080",
+        ])
+
     # 代理
     proxy = os.getenv("XHS_PROXY")
     if proxy:
@@ -379,9 +389,25 @@ def _mask_proxy(proxy_url: str) -> str:
 
 
 def has_display() -> bool:
-    """检测当前环境是否有图形界面（用于自动选择登录方式）。"""
+    """检测当前环境是否有图形界面（用于自动选择登录方式）。
+
+    支持虚拟显示（Xvfb/Xvnc）：如果 vnc_display 管理的虚拟显示正在运行，
+    自动设置 DISPLAY 环境变量并返回 True。
+    """
     system = platform.system()
     if system in ("Windows", "Darwin"):
         return True  # Windows / macOS 默认有 GUI
     # Linux: 检查 DISPLAY 或 WAYLAND_DISPLAY 环境变量
-    return bool(os.getenv("DISPLAY") or os.getenv("WAYLAND_DISPLAY"))
+    if os.getenv("DISPLAY") or os.getenv("WAYLAND_DISPLAY"):
+        return True
+    # 尝试使用 vnc_display 管理的虚拟显示
+    try:
+        from vnc_display import get_display_env
+        vdisplay = get_display_env()
+        if vdisplay:
+            os.environ["DISPLAY"] = vdisplay
+            logger.info("使用虚拟显示: DISPLAY=%s", vdisplay)
+            return True
+    except ImportError:
+        pass
+    return False
