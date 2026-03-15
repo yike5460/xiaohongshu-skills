@@ -19,6 +19,7 @@ import time
 from .cdp import Page
 from .human import sleep_random
 from .types import ActionResult
+from .urls import make_feed_detail_url
 
 logger = logging.getLogger(__name__)
 
@@ -233,3 +234,58 @@ def unfavorite_feed_in_popup(page: Page) -> ActionResult:
     if btn_after and not btn_after["liked"]:
         return ActionResult(feed_id="", success=True, message="取消收藏成功")
     return ActionResult(feed_id="", success=False, message="取消收藏可能未成功")
+
+
+# ========== 包装函数：导航到详情页再操作 ==========
+
+_DETAIL_INDICATOR = "#noteContainer .engage-bar"
+
+
+def _navigate_to_detail(page: Page, feed_id: str, xsec_token: str) -> bool:
+    """导航到笔记详情页并等待 engage bar 加载。"""
+    url = make_feed_detail_url(feed_id, xsec_token)
+    page.navigate(url)
+    for attempt in range(8):
+        if page.has_element(_DETAIL_INDICATOR):
+            return True
+        if page.has_element(".engage-bar"):
+            return True
+        logger.info("等待详情页渲染 (尝试 %d/8)...", attempt + 1)
+        sleep_random(1500, 2500)
+    return False
+
+
+def like_feed(page: Page, feed_id: str, xsec_token: str) -> ActionResult:
+    """导航到笔记详情页并点赞。"""
+    if not _navigate_to_detail(page, feed_id, xsec_token):
+        return ActionResult(feed_id=feed_id, success=False, message="详情页加载失败")
+    result = like_feed_in_popup(page)
+    result.feed_id = feed_id
+    return result
+
+
+def unlike_feed(page: Page, feed_id: str, xsec_token: str) -> ActionResult:
+    """导航到笔记详情页并取消点赞。"""
+    if not _navigate_to_detail(page, feed_id, xsec_token):
+        return ActionResult(feed_id=feed_id, success=False, message="详情页加载失败")
+    result = unlike_feed_in_popup(page)
+    result.feed_id = feed_id
+    return result
+
+
+def favorite_feed(page: Page, feed_id: str, xsec_token: str) -> ActionResult:
+    """导航到笔记详情页并收藏。"""
+    if not _navigate_to_detail(page, feed_id, xsec_token):
+        return ActionResult(feed_id=feed_id, success=False, message="详情页加载失败")
+    result = favorite_feed_in_popup(page)
+    result.feed_id = feed_id
+    return result
+
+
+def unfavorite_feed(page: Page, feed_id: str, xsec_token: str) -> ActionResult:
+    """导航到笔记详情页并取消收藏。"""
+    if not _navigate_to_detail(page, feed_id, xsec_token):
+        return ActionResult(feed_id=feed_id, success=False, message="详情页加载失败")
+    result = unfavorite_feed_in_popup(page)
+    result.feed_id = feed_id
+    return result
