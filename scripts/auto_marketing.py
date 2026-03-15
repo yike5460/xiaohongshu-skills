@@ -109,7 +109,7 @@ def generate_comment(title: str, content: str, author: str, promo_info: str, is_
         user_prompt = f"帖子标题：{title}\n帖子内容：{content[:300]}\n作者：{author}\n\n请生成一条评论："
 
         response = client.chat.completions.create(
-            model="gpt-4.1-mini",
+            model="gpt-4.1",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
