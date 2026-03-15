@@ -78,8 +78,9 @@ def generate_comment(title: str, content: str, author: str, promo_info: str, is_
         is_promo: 是否为推广评论（False则为纯互动评论）
     """
     try:
-        import openai
-        client = openai.OpenAI()
+        from anthropic import AnthropicBedrock
+
+        client = AnthropicBedrock(aws_region="us-west-2")
 
         if is_promo:
             system_prompt = f"""你是一个小红书用户，正在浏览帖子并发表评论。
@@ -94,7 +95,7 @@ def generate_comment(title: str, content: str, author: str, promo_info: str, is_
 
 推广信息：{promo_info}
 
-重要：评论必须跟帖子内容相关，不能答非所问。推广信息要巧妙融入，不能太突兀。"""
+重要：评论必须跟帖子内容相关，不能答非所问。推广信息要巧妙融入，不能太突兀。只输出评论文本本身，不要输出任何标题、解释、分析或格式说明。"""
         else:
             system_prompt = """你是一个小红书用户，正在浏览帖子并发表评论。
 你的评论需要：
@@ -104,20 +105,20 @@ def generate_comment(title: str, content: str, author: str, promo_info: str, is_
 4. emoji 0-2 个
 5. 语气真诚自然
 
-这是一条纯互动评论，不需要包含任何推广信息。"""
+这是一条纯互动评论，不需要包含任何推广信息。
+重要：只输出评论文本本身，不要输出任何标题、解释、分析或格式说明。"""
 
         user_prompt = f"帖子标题：{title}\n帖子内容：{content[:300]}\n作者：{author}\n\n请生成一条评论："
 
-        response = client.chat.completions.create(
-            model="gpt-4.1",
+        response = client.messages.create(
+            model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            max_tokens=150,
+            system=system_prompt,
             messages=[
-                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            max_tokens=150,
-            temperature=0.9,
         )
-        comment = response.choices[0].message.content.strip()
+        comment = response.content[0].text.strip()
         # 去除可能的引号包裹
         if comment.startswith('"') and comment.endswith('"'):
             comment = comment[1:-1]
