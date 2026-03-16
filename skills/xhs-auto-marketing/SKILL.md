@@ -70,6 +70,7 @@ DISPLAY=:99 python scripts/auto_marketing.py \
 | `--max-per-keyword` | ❌ | 3 | 每个关键词最多处理数 |
 | `--daily-limit` | ❌ | 15 | 每日评论上限 |
 | `--promo-ratio` | ❌ | 0.7 | 推广评论占比(0-1) |
+| `--proxy` | ❌ | "" | 代理地址(socks5://或http://) |
 | `--dry-run` | ❌ | false | 试运行，不实际发送评论 |
 
 ### 关键词智能泛化
@@ -118,3 +119,36 @@ DISPLAY=:99 python scripts/auto_marketing.py \
 - **非活跃时段**：等待进入时间窗口
 - **Chrome 未启动**：先运行 `chrome_launcher.py`
 - **未登录**：先执行 xhs-auth 登录
+- **IP 被风控**：见下方代理配置
+
+## 代理配置（IP 风控应对）
+
+当 IP 被小红书标记为风险 IP 时（页面显示"安全限制"），有以下选择：
+
+### 方式 1: 等待自动解除
+通常 24 小时后风控自动解除，期间暂停所有 cron 任务。
+
+### 方式 2: 更换代理 IP
+通过 `--proxy` 参数或 `XHS_PROXY` 环境变量设置代理：
+
+```bash
+# SOCKS5 代理
+XHS_PROXY=socks5://127.0.0.1:1080
+
+# HTTP 代理（带认证）
+XHS_PROXY=http://user:pass@proxy.example.com:8080
+
+# 在 auto_marketing.py 中直接传参
+python auto_marketing.py --proxy socks5://127.0.0.1:1080 ...
+```
+
+⚠️ 更换代理后需要 **重启 Chrome**（代理是 Chrome 启动参数）：
+```bash
+python chrome_launcher.py stop
+XHS_PROXY=socks5://127.0.0.1:1080 python chrome_launcher.py start --headless
+```
+
+### 推荐代理类型
+- **住宅代理**（Residential Proxy）：最不容易被检测，推荐 Bright Data、SmartProxy、IPRoyal
+- **SOCKS5 代理**：延迟低，适合浏览器自动化
+- **避免使用数据中心代理**（DataCenter）：容易被小红书识别和封禁

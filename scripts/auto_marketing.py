@@ -613,11 +613,17 @@ def main():
     parser.add_argument("--daily-limit", type=int, default=15, help="每日评论上限")
     parser.add_argument("--promo-ratio", type=float, default=0.7, help="推广评论占比")
     parser.add_argument("--account", default="", help="账号名称")
+    parser.add_argument("--proxy", default="", help="代理地址 (socks5://host:port 或 http://user:pass@host:port)")
     parser.add_argument("--dry-run", action="store_true", help="试运行模式")
     args = parser.parse_args()
 
     keywords = [k.strip() for k in args.keywords.split(",") if k.strip()]
     filter_terms = [f.strip() for f in args.filter.split(",") if f.strip()]
+
+    # 设置代理（供 chrome_launcher 使用）
+    if args.proxy:
+        os.environ["XHS_PROXY"] = args.proxy
+        logger.info("代理已设置: %s", args.proxy.split("@")[-1] if "@" in args.proxy else args.proxy)
 
     if not _in_active_hours() and not args.dry_run:
         # dry-run 模式不受时间限制

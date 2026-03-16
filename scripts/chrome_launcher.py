@@ -106,6 +106,7 @@ def launch_chrome(
     headless: bool = False,
     user_data_dir: str | None = None,
     chrome_bin: str | None = None,
+    proxy: str | None = None,
 ) -> subprocess.Popen | None:
     """启动 Chrome 进程（带远程调试端口）。
 
@@ -114,6 +115,8 @@ def launch_chrome(
         headless: 是否无头模式。
         user_data_dir: 用户数据目录（Profile 隔离），默认 ~/.xhs/chrome-profile。
         chrome_bin: Chrome 可执行文件路径。
+        proxy: 代理地址，如 socks5://host:port 或 http://user:pass@host:port。
+               也可通过环境变量 XHS_PROXY 设置。
 
     Returns:
         Chrome 子进程，若已在运行则返回 None。
@@ -159,7 +162,8 @@ def launch_chrome(
         ])
 
     # 代理
-    proxy = os.getenv("XHS_PROXY")
+    # 代理（参数优先，其次环境变量）
+    proxy = proxy or os.getenv("XHS_PROXY")
     if proxy:
         args.append(f"--proxy-server={proxy}")
         logger.info("使用代理: %s", _mask_proxy(proxy))
@@ -288,6 +292,7 @@ def restart_chrome(
     headless: bool = False,
     user_data_dir: str | None = None,
     chrome_bin: str | None = None,
+    proxy: str | None = None,
 ) -> subprocess.Popen | None:
     """重启 Chrome：关闭当前实例后以新模式重新启动。
 
@@ -296,6 +301,7 @@ def restart_chrome(
         headless: 是否无头模式。
         user_data_dir: 用户数据目录。
         chrome_bin: Chrome 可执行文件路径。
+        proxy: 代理地址。
 
     Returns:
         新的 Chrome 子进程，或 None。
@@ -308,6 +314,7 @@ def restart_chrome(
         headless=headless,
         user_data_dir=user_data_dir,
         chrome_bin=chrome_bin,
+        proxy=proxy,
     )
 
 
