@@ -309,7 +309,7 @@ def _trigger_circuit_breaker(hours: int = 24) -> None:
 # ========== 时间窗口检查 ==========
 
 def _in_active_hours() -> bool:
-    """检查当前是否在活跃时间段（CST 8:00-20:00）。"""
+    """检查当前是否在活跃时间段（北京时间 8:00-20:00）。"""
     now_cst = datetime.now(timezone(timedelta(hours=8)))
     hour = now_cst.hour
     return 8 <= hour < 20
@@ -370,7 +370,7 @@ def run_marketing(
 
     # 检查时间窗口（dry_run 模式跳过）
     if not _in_active_hours() and not dry_run:
-        return {"success": False, "reason": "outside_active_hours", "message": "当前不在活跃时间段(CST 8:00-20:00)"}
+        return {"success": False, "reason": "outside_active_hours", "message": "当前不在活跃时间段(北京时间 8:00-20:00)"}
 
     # 加载日状态
     state = _load_daily_state()
@@ -589,7 +589,7 @@ def main():
         print(json.dumps({
             "success": False,
             "reason": "outside_active_hours",
-            "message": "当前不在活跃时间段(CST 8:00-20:00)",
+            "message": "当前不在活跃时间段(北京时间 8:00-20:00)",
         }, ensure_ascii=False, indent=2))
         return
 
