@@ -103,15 +103,20 @@ def _search_via_ui(page: Page, keyword: str) -> None:
 
     sleep_random(300, 600)
 
-    # 按 Enter 搜索
+    # 按 Enter 搜索（完整三段式事件：rawKeyDown + char + keyUp）
+    # 小红书 Vue 组件需要完整序列才能触发表单提交
     logger.info("按 Enter 提交搜索")
     page._send_session("Input.dispatchKeyEvent", {
-        "type": "keyDown", "key": "Enter", "code": "Enter",
-        "windowsVirtualKeyCode": 13,
+        "type": "rawKeyDown", "key": "Enter", "code": "Enter",
+        "windowsVirtualKeyCode": 13, "nativeVirtualKeyCode": 13,
+    })
+    page._send_session("Input.dispatchKeyEvent", {
+        "type": "char", "key": "Enter", "code": "Enter",
+        "windowsVirtualKeyCode": 13, "text": "\r",
     })
     page._send_session("Input.dispatchKeyEvent", {
         "type": "keyUp", "key": "Enter", "code": "Enter",
-        "windowsVirtualKeyCode": 13,
+        "windowsVirtualKeyCode": 13, "nativeVirtualKeyCode": 13,
     })
 
     # 等待搜索结果加载
