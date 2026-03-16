@@ -53,6 +53,8 @@ from xhs.human import sleep_random
 from xhs.like_favorite import like_feed_in_popup
 from run_lock import RunLock
 
+SCREENSHOT_DIR = Path.home() / ".xhs" / "marketing" / "screenshots"
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -235,6 +237,34 @@ def _post_comment_in_popup(page: Page, content: str) -> dict:
 
     except Exception as e:
         return {"success": False, "message": str(e)}
+
+
+def _screenshot_comment_proof(page: Page, feed_id: str, keyword: str) -> str | None:
+    """评论成功后截图保存到 SCREENSHOT_DIR，返回文件路径或 None。"""
+    try:
+        SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(timezone(timedelta(hours=8))).strftime("%Y%m%d_%H%M%S")
+        fname = f"{ts}_{feed_id[:12]}_{keyword}.jpg"
+        path = SCREENSHOT_DIR / fname
+
+        # 截取 noteContainer 区域（含评论）
+        png = page.screenshot_element("#noteContainer")
+        if png:
+            path = path.with_suffix(".png")
+            path.write_bytes(png)
+        else:
+            # 回退：全屏截图
+            import base64 as _b64
+            result = page._send_session(
+                "Page.captureScreenshot", {"format": "jpeg", "quality": 85}
+            )
+            path.write_bytes(_b64.b64decode(result["data"]))
+
+        logger.info("评论截图已保存: %s (%dKB)", path.name, path.stat().st_size // 1024)
+        return str(path)
+    except Exception as e:
+        logger.warning("评论截图失败: %s", e)
+        return None
 
 
 # ========== URL信息提取 ==========
@@ -475,6 +505,10 @@ def run_marketing(
                             state["commented_feeds"].append(feed_id)
                             seen_feeds.add(feed_id)
                         _save_daily_state(state)
+
+                        # 截图留证
+                        screenshot_path = _screenshot_comment_proof(page, feed_id or "unknown", kw)
+                        comment_result["screenshot"] = screenshot_path
                     else:
                         consecutive_errors += 1
                         state["errors"] += 1
@@ -519,6 +553,7 @@ def run_marketing(
                     "comment_success": comment_result["success"],
                     "comment_message": comment_result["message"],
                     "feed_id": feed_id,
+                    "screenshot": comment_result.get("screenshot"),
                 })
 
                 total += 1

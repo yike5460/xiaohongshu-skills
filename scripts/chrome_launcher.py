@@ -141,6 +141,7 @@ def launch_chrome(
         chrome_bin,
         f"--remote-debugging-port={port}",
         f"--user-data-dir={user_data_dir}",
+        "--remote-allow-origins=*",
         *STEALTH_ARGS,
     ]
 
