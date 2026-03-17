@@ -450,6 +450,16 @@ def run_marketing(
 
         sleep_random(2000, 3500)
 
+        # 关闭 cookie consent 弹窗（海外 IP 会触发）
+        page.evaluate("""
+            (() => {
+                const btns = document.querySelectorAll('button');
+                for (const b of btns) {
+                    if ((b.innerText || '').includes('Accept')) { b.click(); break; }
+                }
+            })()
+        """)
+
         # 检查是否被风控/限流
         rate_limit = detect_rate_limit(page)
         if rate_limit:
