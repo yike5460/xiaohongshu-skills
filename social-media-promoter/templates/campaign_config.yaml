@@ -1,0 +1,54 @@
+# Campaign Configuration
+# Copy this file to ./campaign-output/campaign_config.yaml and customize
+
+# Campaign type: launch | update | engagement | event
+campaign_type: launch
+
+# Target platforms (remove any you don't need)
+platforms:
+  - x
+  - discord
+  - reddit
+  - producthunt
+  - xiaohongshu
+  - zhihu
+
+# Content languages: en, zh, or both
+languages:
+  - en
+
+# Tone: professional | casual | technical | enthusiastic
+tone: professional
+
+# Scheduling: immediate | staggered
+scheduling: immediate
+
+# Minutes between posts when scheduling is "staggered"
+stagger_delay_minutes: 30
+
+# Dry run mode - set to false only when ready to post live
+dry_run: true
+
+# Platform-specific settings
+platform_settings:
+  x:
+    max_thread_length: 5
+    include_hashtags: true
+  discord:
+    # Webhook URL (or set DISCORD_WEBHOOK_URL env var)
+    webhook_url: ""
+  reddit:
+    # Subreddits to post to (overrides AI suggestions)
+    subreddits: []
+  producthunt:
+    # Topics for Product Hunt listing
+    topics:
+      - developer-tools
+      - open-source
+      - productivity
+  xiaohongshu:
+    # Content always in Chinese
+    include_emoji: true
+  zhihu:
+    # Content always in Chinese, long-form article style
+    article_style: technical

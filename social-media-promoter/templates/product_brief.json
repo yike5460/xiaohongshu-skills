@@ -1,0 +1,32 @@
+{
+  "product_name": "SkillHub",
+  "tagline": "A curated hub of Claude Code skills",
+  "description": "SkillHub is an open-source collection of reusable Claude Code skills that automate complex workflows like presentation generation, code review, and social media promotion.",
+  "features": [
+    {
+      "name": "One-command install",
+      "description": "Copy any skill into your project's .claude/skills/ directory and start using it immediately"
+    },
+    {
+      "name": "AI-powered workflows",
+      "description": "Each skill leverages Claude and other AI models to automate multi-step tasks"
+    },
+    {
+      "name": "Platform integrations",
+      "description": "Built-in support for GitHub, Slack, social media platforms, and more"
+    }
+  ],
+  "target_audience": "Developers and teams using Claude Code who want to automate repetitive workflows",
+  "links": {
+    "homepage": "https://github.com/example/skill-hub",
+    "github": "https://github.com/example/skill-hub",
+    "demo": ""
+  },
+  "assets": {
+    "logo": "",
+    "screenshots": [],
+    "video_url": ""
+  },
+  "pricing": "free and open-source (MIT license)",
+  "launch_context": "new_launch"
+}
