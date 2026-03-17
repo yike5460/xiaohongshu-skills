@@ -8,13 +8,15 @@ from __future__ import annotations
 import json
 import logging
 import random
+import threading
 import time
 from typing import Any
 
 import requests
+import websockets.exceptions as ws_exc
 import websockets.sync.client as ws_client
 
-from .errors import CDPError, ElementNotFoundError
+from .errors import CDPConnectionError, CDPError, ElementNotFoundError
 from .stealth import STEALTH_JS, build_ua_override
 
 logger = logging.getLogger(__name__)
@@ -24,9 +26,24 @@ class CDPClient:
     """底层 CDP WebSocket 通信客户端。"""
 
     def __init__(self, ws_url: str) -> None:
+        self._ws_url = ws_url
         self._ws = ws_client.connect(ws_url, max_size=50 * 1024 * 1024)
         self._id = 0
         self._callbacks: dict[int, Any] = {}
+        self._keepalive_stop = threading.Event()
+        self._keepalive_thread = threading.Thread(
+            target=self._keepalive_loop, daemon=True, name="cdp-keepalive"
+        )
+        self._keepalive_thread.start()
+
+    def _keepalive_loop(self) -> None:
+        """定期发送 CDP 命令保持 WebSocket 连接活跃。"""
+        while not self._keepalive_stop.wait(timeout=30.0):
+            try:
+                self._ws.ping()
+            except Exception:
+                logger.debug("keepalive ping 失败，连接可能已断开")
+                break
 
     def send(self, method: str, params: dict | None = None) -> dict:
         """发送 CDP 命令并等待结果。"""
@@ -55,22 +72,73 @@ class CDPClient:
     def close(self) -> None:
         import contextlib
 
+        self._keepalive_stop.set()
         with contextlib.suppress(Exception):
             self._ws.close()
+
+    def reconnect(self, ws_url: str | None = None) -> None:
+        """关闭旧连接并重新建立 WebSocket 连接。
+
+        Args:
+            ws_url: 新的 WebSocket URL（为 None 时复用上次的 URL）。
+        """
+        import contextlib
+
+        self._keepalive_stop.set()
+        with contextlib.suppress(Exception):
+            self._ws.close()
+        if ws_url:
+            self._ws_url = ws_url
+        logger.info("正在重连 CDP WebSocket: %s", self._ws_url)
+        self._ws = ws_client.connect(self._ws_url, max_size=50 * 1024 * 1024)
+        self._id = 0
+        self._keepalive_stop = threading.Event()
+        self._keepalive_thread = threading.Thread(
+            target=self._keepalive_loop, daemon=True, name="cdp-keepalive"
+        )
+        self._keepalive_thread.start()
+        logger.info("CDP WebSocket 重连成功")
 
 
 class Page:
     """CDP 页面对象，封装常用操作。"""
 
-    def __init__(self, cdp: CDPClient, target_id: str, session_id: str) -> None:
+    def __init__(
+        self,
+        cdp: CDPClient,
+        target_id: str,
+        session_id: str,
+        browser: "Browser | None" = None,
+    ) -> None:
         self._cdp = cdp
+        self._browser = browser
+        self._in_reconnect = False
         self.target_id = target_id
         self.session_id = session_id
         self._ws = cdp._ws
         self._id_counter = 1000
 
     def _send_session(self, method: str, params: dict | None = None) -> dict:
-        """向 session 发送命令。"""
+        """向 session 发送命令，WebSocket 断连时自动重连重试。"""
+        if self._in_reconnect:
+            return self._send_session_raw(method, params)
+        try:
+            return self._send_session_raw(method, params)
+        except Exception as e:
+            if self._browser and self._is_connection_error(e):
+                logger.warning("CDP WebSocket 断连 (%s: %s)，尝试自动重连...", type(e).__name__, e)
+                try:
+                    self._browser._reconnect_page(self)
+                    logger.info("重连成功，重试命令: %s", method)
+                    return self._send_session_raw(method, params)
+                except Exception as re_err:
+                    raise CDPConnectionError(
+                        f"WebSocket 重连后仍失败: {re_err}"
+                    ) from re_err
+            raise
+
+    def _send_session_raw(self, method: str, params: dict | None = None) -> dict:
+        """向 session 发送命令（无重连逻辑）。"""
         self._id_counter += 1
         msg: dict[str, Any] = {
             "id": self._id_counter,
@@ -96,6 +164,22 @@ class Page:
                     raise CDPError(f"CDP 错误: {data['error']}")
                 return data.get("result", {})
         raise CDPError(f"等待 session 响应超时 (id={msg_id})")
+
+    @staticmethod
+    def _is_connection_error(exc: Exception) -> bool:
+        """判断是否为 WebSocket 连接断开异常（可通过重连恢复）。"""
+        return isinstance(
+            exc,
+            (
+                ConnectionError,
+                BrokenPipeError,
+                OSError,
+                ws_exc.ConnectionClosed,
+                ws_exc.ConnectionClosedError,
+                ws_exc.ConnectionClosedOK,
+                ws_exc.InvalidState,
+            ),
+        )
 
     def navigate(self, url: str) -> None:
         """导航到指定 URL。"""
@@ -631,7 +715,7 @@ class Browser:
             {"targetId": target_id, "flatten": True},
         )
         session_id = result["sessionId"]
-        return self._setup_page(Page(self._cdp, target_id, session_id))
+        return self._setup_page(Page(self._cdp, target_id, session_id, browser=self))
 
     def get_or_create_page(self) -> Page:
         """复用现有空白 tab，找不到时才新建。
@@ -662,7 +746,7 @@ class Browser:
                     session_id = result.get("sessionId")
                     if session_id:
                         logger.debug("复用空白 tab: %s", target_id)
-                        return self._setup_page(Page(self._cdp, target_id, session_id))
+                        return self._setup_page(Page(self._cdp, target_id, session_id, browser=self))
 
         # 没有空白 tab，新建一个
         return self.new_page()
@@ -682,7 +766,7 @@ class Browser:
         session_id = result.get("sessionId")
         if not session_id:
             return None
-        page = Page(self._cdp, target_id, session_id)
+        page = Page(self._cdp, target_id, session_id, browser=self)
         page._send_session("Page.enable")
         page._send_session("DOM.enable")
         page._send_session("Runtime.enable")
@@ -706,7 +790,7 @@ class Browser:
                     {"targetId": target_id, "flatten": True},
                 )
                 session_id = result["sessionId"]
-                page = Page(self._cdp, target_id, session_id)
+                page = Page(self._cdp, target_id, session_id, browser=self)
                 page._send_session("Page.enable")
                 page._send_session("DOM.enable")
                 page._send_session("Runtime.enable")
@@ -727,3 +811,57 @@ class Browser:
         if self._cdp:
             self._cdp.close()
             self._cdp = None
+
+    def reconnect(self) -> None:
+        """重新连接到 Chrome DevTools（刷新 WebSocket URL 并重连）。"""
+        logger.info("Browser: 正在重连 CDP...")
+        resp = requests.get(f"{self.base_url}/json/version", timeout=5)
+        resp.raise_for_status()
+        info = resp.json()
+        ws_url = info["webSocketDebuggerUrl"]
+
+        browser_str = info.get("Browser", "")
+        if "/" in browser_str:
+            self._chrome_version = browser_str.split("/", 1)[1]
+
+        if self._cdp:
+            self._cdp.reconnect(ws_url)
+        else:
+            self._cdp = CDPClient(ws_url)
+        logger.info("Browser: CDP 重连成功 (version=%s)", self._chrome_version)
+
+    def _reconnect_page(self, page: Page) -> None:
+        """重连 CDP 并重新 attach 到指定 Page 的 target。
+
+        重连后更新 Page 的 session_id 和 _ws 引用，并重新启用
+        必要的 CDP domain。
+        """
+        self.reconnect()
+        assert self._cdp is not None
+
+        result = self._cdp.send(
+            "Target.attachToTarget",
+            {"targetId": page.target_id, "flatten": True},
+        )
+        page.session_id = result["sessionId"]
+        page._ws = self._cdp._ws
+
+        # 重新启用必要 domain（使用 _in_reconnect 防止递归重连）
+        page._in_reconnect = True
+        try:
+            page._send_session("Page.enable")
+            page._send_session("DOM.enable")
+            page._send_session("Runtime.enable")
+            page.inject_stealth()
+            page._send_session(
+                "Emulation.setUserAgentOverride",
+                build_ua_override(self._chrome_version),
+            )
+        finally:
+            page._in_reconnect = False
+
+        logger.info(
+            "Page 已重新连接: target=%s, session=%s",
+            page.target_id,
+            page.session_id,
+        )

@@ -71,6 +71,10 @@ class CDPError(XHSError):
     """CDP 通信异常。"""
 
 
+class CDPConnectionError(CDPError):
+    """CDP WebSocket 连接断开异常（可通过重连恢复）。"""
+
+
 class ElementNotFoundError(XHSError):
     """页面元素未找到。"""
 

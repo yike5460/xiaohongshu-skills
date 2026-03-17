@@ -48,6 +48,7 @@ from xhs.browse import (
     _ensure_on_explore,
 )
 from xhs.cdp import Browser, Page
+from xhs.errors import CDPConnectionError
 from xhs.comment import post_comment as _raw_post_comment, _insert_text_and_enable, _wait_submit_enabled
 from xhs.human import sleep_random
 from xhs.like_favorite import like_feed_in_popup
@@ -265,6 +266,8 @@ def _post_comment_in_popup(page: Page, content: str) -> dict:
         else:
             return {"success": True, "message": "评论已提交（未能验证是否显示）"}
 
+    except CDPConnectionError:
+        raise  # 连接断开异常由外层处理重连，不在此消化
     except Exception as e:
         return {"success": False, "message": str(e)}
 
@@ -628,6 +631,17 @@ def run_marketing(
                     wait_min = random.randint(180, 480)
                     logger.info("等待 %d 秒后处理下一条...", wait_min)
                     time.sleep(wait_min)
+
+            except CDPConnectionError as e:
+                # WebSocket 断连已由 CDP 层尝试自动重连；若仍失败则到达此处
+                # 不计入连续错误 / 不触发熔断，等待下次操作自然重连
+                logger.warning("CDP 连接异常（不计入熔断）: %s", e)
+                try:
+                    _close_detail(page)
+                except Exception:
+                    pass
+                sleep_random(5000, 10000)
+                continue
 
             except Exception as e:
                 logger.warning("处理卡片异常: %s", e)
