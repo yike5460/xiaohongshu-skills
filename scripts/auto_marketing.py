@@ -51,6 +51,7 @@ from xhs.cdp import Browser, Page
 from xhs.comment import post_comment as _raw_post_comment, _insert_text_and_enable, _wait_submit_enabled
 from xhs.human import sleep_random
 from xhs.like_favorite import like_feed_in_popup
+from xhs.rate_limit import detect_rate_limit
 from run_lock import RunLock
 
 SCREENSHOT_DIR = Path.home() / ".xhs" / "marketing" / "screenshots"
@@ -70,7 +71,7 @@ CIRCUIT_BREAKER_FILE = STATE_DIR / "circuit_breaker.json"
 # ========== AI 评论生成 ==========
 
 def generate_comment(title: str, content: str, author: str, promo_info: str, is_promo: bool) -> str:
-    """用 AI 生成评论。优先用 OpenAI，回退到模板。
+    """用 AI 生成评论。优先用 Gemini，回退到模板。
 
     Args:
         title: 帖子标题
@@ -80,9 +81,9 @@ def generate_comment(title: str, content: str, author: str, promo_info: str, is_
         is_promo: 是否为推广评论（False则为纯互动评论）
     """
     try:
-        from anthropic import AnthropicBedrock
+        from google import genai
 
-        client = AnthropicBedrock(aws_region="us-west-2")
+        client = genai.Client()
 
         if is_promo:
             system_prompt = f"""你是一个小红书用户，正在浏览帖子并发表评论。
@@ -112,15 +113,12 @@ def generate_comment(title: str, content: str, author: str, promo_info: str, is_
 
         user_prompt = f"帖子标题：{title}\n帖子内容：{content[:300]}\n作者：{author}\n\n请生成一条评论："
 
-        response = client.messages.create(
-            model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
-            max_tokens=150,
-            system=system_prompt,
-            messages=[
-                {"role": "user", "content": user_prompt},
-            ],
+        response = client.models.generate_content(
+            model='gemini-2.0-flash',
+            contents=user_prompt,
+            config={'system_instruction': system_prompt, 'max_output_tokens': 150},
         )
-        comment = response.content[0].text.strip()
+        comment = response.text.strip()
         # 去除可能的引号包裹
         if comment.startswith('"') and comment.endswith('"'):
             comment = comment[1:-1]
@@ -432,6 +430,21 @@ def run_marketing(
 
         sleep_random(2000, 3500)
 
+        # 检查是否被风控/限流
+        rate_limit = detect_rate_limit(page)
+        if rate_limit:
+            logger.error("检测到风控: %s", rate_limit["message"])
+            return {
+                "success": False,
+                "reason": "rate_limited",
+                "rate_limited": True,
+                "rate_limit_type": rate_limit["type"],
+                "message": rate_limit["message"],
+                "instruction": "请通过 --proxy 参数配置代理后重试",
+                "total_processed": total,
+                "results": results,
+            }
+
         cards = _analyze_feed_cards(page)
         logger.info("找到 %d 张卡片", len(cards))
 
@@ -461,6 +474,19 @@ def run_marketing(
                     continue
 
                 sleep_random(2500, 4000)
+
+                # 等待 #noteContainer 加载
+                container_loaded = False
+                for _wait in range(10):
+                    if page.has_element('#noteContainer'):
+                        container_loaded = True
+                        break
+                    time.sleep(1)
+                if not container_loaded:
+                    logger.warning("noteContainer 未加载，跳过此卡片")
+                    _close_detail(page)
+                    sleep_random(1000, 2000)
+                    continue
 
                 # 提取详情
                 detail = _extract_detail_info(page) or {}
