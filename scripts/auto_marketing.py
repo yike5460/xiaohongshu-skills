@@ -151,6 +151,18 @@ def generate_comment(title: str, content: str, author: str, promo_info: str, is_
         return _fallback_comment(title, is_promo, promo_info)
 
 
+def _dismiss_cookie_banner(page: Page) -> None:
+    """关闭 cookie consent 弹窗（海外 IP 访问时触发）。"""
+    page.evaluate("""
+        (() => {
+            const btns = document.querySelectorAll('button');
+            for (const b of btns) {
+                if ((b.innerText || '').includes('Accept')) { b.click(); break; }
+            }
+        })()
+    """)
+
+
 def _fallback_comment(title: str, is_promo: bool, promo_info: str) -> str:
     """AI 不可用时的模板评论。"""
     if is_promo:
@@ -451,14 +463,7 @@ def run_marketing(
         sleep_random(2000, 3500)
 
         # 关闭 cookie consent 弹窗（海外 IP 会触发）
-        page.evaluate("""
-            (() => {
-                const btns = document.querySelectorAll('button');
-                for (const b of btns) {
-                    if ((b.innerText || '').includes('Accept')) { b.click(); break; }
-                }
-            })()
-        """)
+        _dismiss_cookie_banner(page)
 
         # 检查是否被风控/限流
         rate_limit = detect_rate_limit(page)
@@ -499,6 +504,7 @@ def run_marketing(
             logger.info("打开: %s", title[:60] or "(无标题)")
 
             try:
+                _dismiss_cookie_banner(page)
                 if not _click_card_by_position(page, card):
                     logger.warning("点击卡片失败，跳过")
                     continue
