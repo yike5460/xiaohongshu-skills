@@ -23,6 +23,7 @@ DEFAULT_PORT = 9222
 
 # 全局进程追踪
 _chrome_process: subprocess.Popen | None = None
+_proxy_bridge_process: subprocess.Popen | None = None
 
 # 各平台 Chrome 默认路径
 _CHROME_PATHS: dict[str, list[str]] = {
@@ -161,11 +162,11 @@ def launch_chrome(
             "--window-size=1920,1080",
         ])
 
-    # 代理
     # 代理（参数优先，其次环境变量）
     proxy = proxy or os.getenv("XHS_PROXY")
     if proxy:
-        args.append(f"--proxy-server={proxy}")
+        chrome_proxy = get_proxy_for_chrome(proxy)
+        args.append(f"--proxy-server={chrome_proxy}")
         logger.info("使用代理: %s", _mask_proxy(proxy))
 
     logger.info("启动 Chrome: port=%d, headless=%s, profile=%s", port, headless, user_data_dir)
@@ -381,6 +382,73 @@ def _kill_pid(pid: int) -> None:
             os.kill(pid, signal.SIGTERM)
     except Exception:
         logger.debug("终止进程 %d 失败", pid)
+
+
+def start_proxy_bridge(upstream_url: str, port: int = 18080) -> subprocess.Popen:
+    """Start proxy_bridge.py as a subprocess for auth proxy support.
+
+    Only starts if upstream_url contains auth credentials (user:pass@).
+
+    Args:
+        upstream_url: Upstream proxy URL (e.g. http://user:pass@host:port).
+        port: Local listen port for the bridge.
+
+    Returns:
+        The bridge subprocess.
+    """
+    global _proxy_bridge_process
+    stop_proxy_bridge()
+
+    bridge_script = Path(__file__).parent / "proxy_bridge.py"
+    _proxy_bridge_process = subprocess.Popen(
+        [sys.executable, str(bridge_script), "--upstream", upstream_url, "--port", str(port)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    # Wait briefly for the bridge to start listening
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if is_port_open(port):
+            logger.info("Proxy bridge 已启动: 127.0.0.1:%d", port)
+            return _proxy_bridge_process
+        time.sleep(0.3)
+    logger.warning("Proxy bridge 启动超时，继续使用")
+    return _proxy_bridge_process
+
+
+def stop_proxy_bridge() -> None:
+    """Kill any running proxy bridge subprocess."""
+    global _proxy_bridge_process
+    if _proxy_bridge_process and _proxy_bridge_process.poll() is None:
+        _proxy_bridge_process.terminate()
+        try:
+            _proxy_bridge_process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            _proxy_bridge_process.kill()
+        logger.info("Proxy bridge 已停止")
+    _proxy_bridge_process = None
+
+
+def get_proxy_for_chrome(proxy_url: str) -> str:
+    """Resolve proxy URL for Chrome, starting a local bridge if auth is needed.
+
+    If proxy_url has auth credentials (user:pass@), starts a local proxy bridge
+    and returns the local bridge address. Otherwise returns proxy_url as-is.
+
+    Args:
+        proxy_url: Original proxy URL.
+
+    Returns:
+        Proxy URL suitable for Chrome's --proxy-server flag.
+    """
+    from urllib.parse import urlparse
+
+    parsed = urlparse(proxy_url)
+    if parsed.username:
+        bridge_port = 18080
+        start_proxy_bridge(proxy_url, port=bridge_port)
+        return f"http://127.0.0.1:{bridge_port}"
+    return proxy_url
 
 
 def _mask_proxy(proxy_url: str) -> str:
