@@ -128,7 +128,26 @@ def generate_comment(title: str, content: str, author: str, promo_info: str, is_
         return comment
 
     except Exception as e:
-        logger.warning("AI 生成评论失败: %s，使用模板", e)
+        logger.warning("Bedrock AI 生成评论失败: %s，尝试 Gemini 回退", e)
+
+    # 回退：尝试 Gemini
+    try:
+        from google import genai
+
+        client = genai.Client()
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=user_prompt,
+            config={"system_instruction": system_prompt, "max_output_tokens": 150},
+        )
+        comment = response.text.strip()
+        if comment.startswith('"') and comment.endswith('"'):
+            comment = comment[1:-1]
+        if comment.startswith("'") and comment.endswith("'"):
+            comment = comment[1:-1]
+        return comment
+    except Exception as e2:
+        logger.warning("Gemini 回退也失败: %s，使用模板", e2)
         return _fallback_comment(title, is_promo, promo_info)
 
 
