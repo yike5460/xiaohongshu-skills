@@ -164,6 +164,82 @@ def _dismiss_cookie_banner(page: Page) -> None:
     """)
 
 
+def _click_card_via_js(page: Page, card: dict) -> bool:
+    """通过 JavaScript 直接点击卡片链接（坐标点击失败时的回退方案）。
+
+    直接获取卡片内的 <a> 链接元素并 click()，绕过坐标定位问题。
+    """
+    index = card.get("index", 0)
+    result = page.evaluate(f"""
+        (() => {{
+            const cards = document.querySelectorAll('section.note-item');
+            const card = cards[{index}];
+            if (!card) return 'no_card';
+            const link = card.querySelector('a.cover, a');
+            if (!link) return 'no_link';
+            link.click();
+            return 'clicked';
+        }})()
+    """)
+    if result == "clicked":
+        logger.info("JS 点击卡片成功 (index=%d)", index)
+        return True
+    logger.warning("JS 点击卡片失败: %s (index=%d)", result, index)
+    return False
+
+
+def _diagnose_page_state(page: Page) -> dict:
+    """诊断页面状态，用于 noteContainer 加载失败时排查问题。"""
+    try:
+        return page.evaluate("""
+            (() => {
+                const nc = document.querySelector('#noteContainer');
+                const mask = document.querySelector('.note-detail-mask');
+                const url = location.href;
+                // 检查是否有阻塞性弹窗
+                const dialogs = document.querySelectorAll(
+                    '[class*=dialog], [class*=modal], [class*=captcha], [class*=verify]'
+                );
+                const visibleDialogs = Array.from(dialogs).filter(
+                    d => d.offsetHeight > 0 && d.offsetWidth > 0
+                ).map(d => ({tag: d.tagName, class: d.className?.substring?.(0, 80) || ''}));
+                // 检查 body 中是否有验证/登录提示
+                const bodyText = document.body?.innerText?.substring(0, 500) || '';
+                const hasVerify = bodyText.includes('验证') || bodyText.includes('扫码') || bodyText.includes('登录');
+                return {
+                    url: url,
+                    noteContainer: !!nc,
+                    noteDetailMask: !!mask,
+                    visibleDialogs: visibleDialogs,
+                    hasVerifyPrompt: hasVerify,
+                    urlChanged: url.includes('/explore/'),
+                };
+            })()
+        """) or {}
+    except Exception as e:
+        logger.warning("页面状态诊断失败: %s", e)
+        return {}
+
+
+def _screenshot_debug(page: Page, label: str) -> str | None:
+    """保存调试截图。"""
+    try:
+        import base64 as _b64
+        SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(timezone(timedelta(hours=8))).strftime("%Y%m%d_%H%M%S")
+        fname = f"debug_{ts}_{label}.jpg"
+        path = SCREENSHOT_DIR / fname
+        result = page._send_session(
+            "Page.captureScreenshot", {"format": "jpeg", "quality": 70}
+        )
+        path.write_bytes(_b64.b64decode(result["data"]))
+        logger.info("调试截图已保存: %s (%dKB)", path.name, path.stat().st_size // 1024)
+        return str(path)
+    except Exception as e:
+        logger.warning("调试截图失败: %s", e)
+        return None
+
+
 def _fallback_comment(title: str, is_promo: bool, promo_info: str) -> str:
     """AI 不可用时的模板评论。"""
     if is_promo:
@@ -378,6 +454,38 @@ def _in_active_hours() -> bool:
     return 8 <= hour < 20
 
 
+def _cleanup_stale_tabs(browser: "Browser") -> None:
+    """清理多余的 Chrome 标签页，只保留一个主页标签。
+
+    多标签页累积会导致 XHS SPA 状态异常（如弹窗打不开）。
+    """
+    try:
+        import requests as _req
+        resp = _req.get(f"{browser.base_url}/json", timeout=5)
+        targets = resp.json()
+        if len(targets) <= 1:
+            return
+
+        logger.info("检测到 %d 个标签页，清理多余的...", len(targets))
+        kept = False
+        for t in targets:
+            url = t.get("url", "")
+            tid = t["id"]
+            # 保留第一个 explore 页面
+            if "xiaohongshu.com/explore" in url and not kept:
+                kept = True
+                continue
+            # 关闭其他页面（search_result、blank、duplicate explore 等）
+            if url == "" or url == "about:blank" or "xiaohongshu.com" in url:
+                try:
+                    _req.get(f"{browser.base_url}/json/close/{tid}", timeout=5)
+                    logger.info("关闭多余标签: %s (%s)", tid[:12], url[:60])
+                except Exception:
+                    pass
+    except Exception as e:
+        logger.warning("清理标签页失败: %s", e)
+
+
 def _get_time_weight() -> float:
     """根据当前时间返回发送权重（高峰时段更活跃）。"""
     now_cst = datetime.now(timezone(timedelta(hours=8)))
@@ -509,8 +617,10 @@ def run_marketing(
             try:
                 _dismiss_cookie_banner(page)
                 if not _click_card_by_position(page, card):
-                    logger.warning("点击卡片失败，跳过")
-                    continue
+                    logger.warning("坐标点击失败，尝试 JS 点击回退")
+                    if not _click_card_via_js(page, card):
+                        logger.warning("JS 点击也失败，跳过")
+                        continue
 
                 sleep_random(2500, 4000)
 
@@ -521,11 +631,72 @@ def run_marketing(
                         container_loaded = True
                         break
                     time.sleep(1)
+
+                # 如果坐标点击后 noteContainer 未加载，尝试 JS 点击回退
                 if not container_loaded:
-                    logger.warning("noteContainer 未加载，跳过此卡片")
+                    logger.warning("坐标点击后 noteContainer 未加载，尝试 JS 点击回退")
+                    _close_detail(page)
+                    sleep_random(500, 1000)
+                    if _click_card_via_js(page, card):
+                        sleep_random(2500, 4000)
+                        for _wait2 in range(10):
+                            if page.has_element('#noteContainer'):
+                                container_loaded = True
+                                break
+                            time.sleep(1)
+
+                if not container_loaded:
+                    consecutive_container_fails = getattr(
+                        run_marketing, '_container_fails', 0
+                    ) + 1
+                    run_marketing._container_fails = consecutive_container_fails
+
+                    # 诊断并截图
+                    diag = _diagnose_page_state(page)
+                    logger.warning(
+                        "noteContainer 未加载 (连续第%d次失败): 诊断=%s",
+                        consecutive_container_fails, diag,
+                    )
+                    if consecutive_container_fails <= 2:
+                        _screenshot_debug(page, f"no_container_{ki}_{card.get('index', 0)}")
+
                     _close_detail(page)
                     sleep_random(1000, 2000)
+
+                    # 连续5次失败：刷新页面重新搜索，给一次重置机会
+                    if consecutive_container_fails == 5:
+                        logger.warning("连续5次 noteContainer 未加载，刷新页面并重新搜索...")
+                        _ensure_on_explore(page)
+                        sleep_random(1000, 2000)
+                        try:
+                            _search_via_ui(page, kw)
+                            sleep_random(2000, 3500)
+                            _dismiss_cookie_banner(page)
+                            cards_refreshed = _analyze_feed_cards(page)
+                            if filter_terms:
+                                relevant, _ = _filter_relevant_cards(cards_refreshed, filter_terms)
+                            else:
+                                relevant = cards_refreshed
+                            logger.info("刷新后找到 %d 张相关卡片", len(relevant))
+                            # 重置迭代器变量（只能继续下一个关键词）
+                        except Exception as re:
+                            logger.warning("刷新重搜索失败: %s", re)
+                        break  # 跳到下一个关键词
+
+                    # 连续10次失败：放弃本轮
+                    if consecutive_container_fails >= 10:
+                        logger.error("连续%d次 noteContainer 未加载，放弃本轮", consecutive_container_fails)
+                        return {
+                            "success": False,
+                            "reason": "noteContainer_load_failure",
+                            "message": f"连续{consecutive_container_fails}次打开笔记失败，可能页面结构变更或反爬触发",
+                            "total_processed": total,
+                            "results": results,
+                        }
                     continue
+                else:
+                    # 成功加载，重置计数器
+                    run_marketing._container_fails = 0
 
                 # 提取详情
                 detail = _extract_detail_info(page) or {}
@@ -721,6 +892,10 @@ def main():
 
     try:
         browser = Browser()
+
+        # 启动前清理多余标签页，避免累积导致页面弹窗异常
+        _cleanup_stale_tabs(browser)
+
         page = browser.get_or_create_page()
 
         result = run_marketing(
