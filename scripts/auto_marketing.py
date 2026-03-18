@@ -629,8 +629,8 @@ def run_marketing(
                 # 随机间隔 3-8 分钟（评论间隔要长）
                 if total < max_notes:
                     wait_min = random.randint(180, 480)
-                    logger.info("等待 %d 秒后处理下一条...", wait_min)
-                    time.sleep(wait_min)
+                    logger.info("等待 %d 秒后处理下一条（heartbeat 保活）...", wait_min)
+                    page.heartbeat_sleep(wait_min)
 
             except CDPConnectionError as e:
                 # WebSocket 断连已由 CDP 层尝试自动重连；若仍失败则到达此处

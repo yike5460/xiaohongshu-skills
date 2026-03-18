@@ -25,11 +25,15 @@ logger = logging.getLogger(__name__)
 class CDPClient:
     """底层 CDP WebSocket 通信客户端。"""
 
-    def __init__(self, ws_url: str) -> None:
+    # Maximum consecutive keepalive failures before giving up
+    _MAX_KEEPALIVE_RETRIES = 5
+
+    def __init__(self, ws_url: str, browser: "Browser | None" = None) -> None:
         self._ws_url = ws_url
         self._ws = ws_client.connect(ws_url, max_size=50 * 1024 * 1024)
         self._id = 0
         self._callbacks: dict[int, Any] = {}
+        self._browser_ref = browser  # back-reference for reconnect
         self._keepalive_stop = threading.Event()
         self._keepalive_thread = threading.Thread(
             target=self._keepalive_loop, daemon=True, name="cdp-keepalive"
@@ -37,13 +41,38 @@ class CDPClient:
         self._keepalive_thread.start()
 
     def _keepalive_loop(self) -> None:
-        """定期发送 CDP 命令保持 WebSocket 连接活跃。"""
+        """定期 ping WebSocket，断连时自动重连。"""
+        consecutive_failures = 0
         while not self._keepalive_stop.wait(timeout=30.0):
             try:
                 self._ws.ping()
+                consecutive_failures = 0  # reset on success
             except Exception:
-                logger.debug("keepalive ping 失败，连接可能已断开")
-                break
+                consecutive_failures += 1
+                logger.warning(
+                    "keepalive ping 失败 (%d/%d)，尝试重连...",
+                    consecutive_failures,
+                    self._MAX_KEEPALIVE_RETRIES,
+                )
+                if consecutive_failures > self._MAX_KEEPALIVE_RETRIES:
+                    logger.error("keepalive 连续失败 %d 次，放弃重连", consecutive_failures)
+                    break
+                # Exponential backoff: 2s, 4s, 8s, 16s, 32s
+                backoff = min(2 ** consecutive_failures, 32)
+                if self._keepalive_stop.wait(timeout=backoff):
+                    break  # stop requested during backoff
+                try:
+                    if self._browser_ref:
+                        # Full browser-level reconnect (refreshes ws_url from /json/version)
+                        self._browser_ref.reconnect()
+                        logger.info("keepalive: Browser 级重连成功")
+                    else:
+                        # Standalone CDPClient reconnect
+                        self.reconnect()
+                        logger.info("keepalive: CDPClient 重连成功")
+                    consecutive_failures = 0
+                except Exception as re_err:
+                    logger.warning("keepalive 重连失败: %s", re_err)
 
     def send(self, method: str, params: dict | None = None) -> dict:
         """发送 CDP 命令并等待结果。"""
@@ -98,6 +127,10 @@ class CDPClient:
         )
         self._keepalive_thread.start()
         logger.info("CDP WebSocket 重连成功")
+
+    def set_browser(self, browser: "Browser") -> None:
+        """Set the Browser back-reference (for keepalive reconnect)."""
+        self._browser_ref = browser
 
 
 class Page:
@@ -646,6 +679,37 @@ class Page:
         )
         return _b64.b64decode(result.get("data", ""))
 
+    def heartbeat_sleep(self, total_seconds: float, interval: float = 20.0) -> None:
+        """Sleep for *total_seconds* while periodically sending a lightweight CDP
+        command to keep the WebSocket connection alive.
+
+        This replaces bare ``time.sleep()`` during long idle periods (e.g. the
+        3-8 minute gap between comments) where the keepalive ping alone may not
+        be sufficient to prevent the server from closing the connection.
+
+        Args:
+            total_seconds: Total duration to sleep (seconds).
+            interval: How often to send a heartbeat CDP command (seconds).
+                      Defaults to 20 s, well within typical WS idle timeouts.
+        """
+        deadline = time.monotonic() + total_seconds
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            wait = min(interval, remaining)
+            time.sleep(wait)
+            if time.monotonic() >= deadline:
+                break
+            # Lightweight CDP heartbeat — just ask for the page URL
+            try:
+                self._send_session("Runtime.evaluate", {
+                    "expression": "1",
+                    "returnByValue": True,
+                })
+            except Exception as exc:
+                logger.debug("heartbeat_sleep: CDP 心跳失败 (%s), 将由 keepalive 重连", exc)
+
 
 class Browser:
     """Chrome 浏览器 CDP 控制器。"""
@@ -670,7 +734,7 @@ class Browser:
             self._chrome_version = browser_str.split("/", 1)[1]
 
         logger.info("连接到 Chrome: %s (version=%s)", ws_url, self._chrome_version)
-        self._cdp = CDPClient(ws_url)
+        self._cdp = CDPClient(ws_url, browser=self)
 
     def _setup_page(self, page: Page) -> Page:
         """为 Page 对象注入 stealth、UA、viewport，并启用必要的 CDP domain。"""
@@ -827,7 +891,7 @@ class Browser:
         if self._cdp:
             self._cdp.reconnect(ws_url)
         else:
-            self._cdp = CDPClient(ws_url)
+            self._cdp = CDPClient(ws_url, browser=self)
         logger.info("Browser: CDP 重连成功 (version=%s)", self._chrome_version)
 
     def _reconnect_page(self, page: Page) -> None:
