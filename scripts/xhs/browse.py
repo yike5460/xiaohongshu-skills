@@ -143,12 +143,15 @@ def _analyze_feed_cards(page: Page) -> list[dict]:
                 const title = card.querySelector('.title span, .note-item .title');
                 const author = card.querySelector('.author-wrapper .name, .author .name');
                 const likes = card.querySelector('.like-wrapper .count, [class*="like"] .count');
+                const desc = card.querySelector('.desc, .note-desc, .content, .footer .content');
                 return {
                     index: i,
                     title: title?.innerText?.trim() || '',
+                    desc: desc?.innerText?.trim() || '',
                     author: author?.innerText?.trim() || '',
                     likes: likes?.innerText?.trim() || '',
                     href: link?.href || '',
+                    fullText: card.innerText?.trim() || '',
                     top: Math.round(rect.top),
                     left: Math.round(rect.left),
                     bottom: Math.round(rect.bottom),
@@ -175,24 +178,33 @@ def _analyze_feed_cards(page: Page) -> list[dict]:
 
 
 def _is_card_relevant(card: dict, relevance_terms: list[str]) -> bool:
-    """判断卡片标题是否与搜索意图相关。
+    """判断卡片是否与搜索意图相关。
+
+    检查标题、描述和卡片全文。任一字段命中任一关键词即为相关。
 
     Args:
-        card: 卡片信息字典（含 title 字段）。
-        relevance_terms: 相关性关键词列表。标题中包含任意一个即为相关。
+        card: 卡片信息字典（含 title / desc / fullText 字段）。
+        relevance_terms: 相关性关键词列表。
 
     Returns:
-        True 如果相关或无法判断（标题为空/无筛选词），False 如果明显不相关。
+        True 如果相关或无法判断（文本为空/无筛选词），False 如果明显不相关。
     """
     if not relevance_terms:
         return True  # 未提供筛选词，不过滤
 
-    title = card.get("title", "").strip().lower()
-    if not title:
-        return True  # 标题为空，无法判断，放行
+    # 合并所有可用文本进行匹配
+    text_parts = [
+        card.get("title", ""),
+        card.get("desc", ""),
+        card.get("fullText", ""),
+    ]
+    combined = " ".join(t.strip() for t in text_parts).lower()
+
+    if not combined.strip():
+        return True  # 无文本，无法判断，放行
 
     for term in relevance_terms:
-        if term.lower() in title:
+        if term.lower() in combined:
             return True
 
     return False
@@ -240,7 +252,11 @@ def _extract_detail_info(page: Page) -> dict:
     """从笔记详情弹窗中提取完整信息。"""
     info = page.evaluate("""
         (() => {
-            const container = document.querySelector('#noteContainer, .note-detail-mask');
+            const container = document.querySelector('#noteContainer')
+                           || document.querySelector('.note-detail-mask')
+                           || document.querySelector('.note-detail')
+                           || document.querySelector('.feed-detail')
+                           || document.querySelector('[class*="note-detail"]');
             if (!container) return null;
 
             // 标题

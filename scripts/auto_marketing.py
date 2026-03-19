@@ -595,7 +595,11 @@ def run_marketing(
         logger.info("找到 %d 张卡片", len(cards))
 
         if filter_terms:
-            relevant, _ = _filter_relevant_cards(cards, filter_terms)
+            relevant, skipped = _filter_relevant_cards(cards, filter_terms)
+            if not relevant and cards:
+                # 筛选过严：回退到前 max_per_keyword 张未筛选卡片
+                logger.warning("相关性筛选全部过滤，回退到未筛选卡片（前 %d 张）", max_per_keyword)
+                relevant = cards[:max_per_keyword]
         else:
             relevant = cards
 
@@ -624,24 +628,38 @@ def run_marketing(
 
                 sleep_random(2500, 4000)
 
-                # 等待 #noteContainer 加载
+                # 等待详情容器加载（多选择器回退）
+                _CONTAINER_SELECTORS = [
+                    '#noteContainer',
+                    '.note-detail-mask',
+                    '.note-detail',
+                    '.feed-detail',
+                    '[class*="note-detail"]',
+                ]
                 container_loaded = False
-                for _wait in range(10):
-                    if page.has_element('#noteContainer'):
-                        container_loaded = True
+                for _wait in range(12):
+                    for sel in _CONTAINER_SELECTORS:
+                        if page.has_element(sel):
+                            container_loaded = True
+                            logger.debug("详情容器已加载: %s", sel)
+                            break
+                    if container_loaded:
                         break
                     time.sleep(1)
 
-                # 如果坐标点击后 noteContainer 未加载，尝试 JS 点击回退
+                # 如果坐标点击后容器未加载，尝试 JS 点击回退
                 if not container_loaded:
-                    logger.warning("坐标点击后 noteContainer 未加载，尝试 JS 点击回退")
+                    logger.warning("坐标点击后详情容器未加载，尝试 JS 点击回退")
                     _close_detail(page)
                     sleep_random(500, 1000)
                     if _click_card_via_js(page, card):
                         sleep_random(2500, 4000)
-                        for _wait2 in range(10):
-                            if page.has_element('#noteContainer'):
-                                container_loaded = True
+                        for _wait2 in range(12):
+                            for sel in _CONTAINER_SELECTORS:
+                                if page.has_element(sel):
+                                    container_loaded = True
+                                    break
+                            if container_loaded:
                                 break
                             time.sleep(1)
 
@@ -797,9 +815,9 @@ def run_marketing(
 
                 _close_detail(page)
 
-                # 随机间隔 3-8 分钟（评论间隔要长）
+                # 随机间隔 1.5-3 分钟（缩短以避免 CDP 超时，同时保持人类节奏）
                 if total < max_notes:
-                    wait_min = random.randint(180, 480)
+                    wait_min = random.randint(90, 180)
                     logger.info("等待 %d 秒后处理下一条（heartbeat 保活）...", wait_min)
                     page.heartbeat_sleep(wait_min)
 
@@ -860,11 +878,18 @@ def main():
     parser.add_argument("--daily-limit", type=int, default=15, help="每日评论上限")
     parser.add_argument("--promo-ratio", type=float, default=0.7, help="推广评论占比")
     parser.add_argument("--account", default="", help="账号名称")
+    parser.add_argument("--max-keywords", type=int, default=2, help="本轮最多处理关键词数（从列表随机选取，默认 2）")
     parser.add_argument("--proxy", default="", help="代理地址 (socks5://host:port 或 http://user:pass@host:port)")
     parser.add_argument("--dry-run", action="store_true", help="试运行模式")
     args = parser.parse_args()
 
-    keywords = [k.strip() for k in args.keywords.split(",") if k.strip()]
+    all_keywords = [k.strip() for k in args.keywords.split(",") if k.strip()]
+    # 随机选取 max_keywords 个关键词，避免每次都跑全量导致超时
+    if len(all_keywords) > args.max_keywords:
+        keywords = random.sample(all_keywords, args.max_keywords)
+        logger.info("从 %d 个关键词中随机选取 %d 个: %s", len(all_keywords), args.max_keywords, keywords)
+    else:
+        keywords = all_keywords
     filter_terms = [f.strip() for f in args.filter.split(",") if f.strip()]
 
     # 设置代理（供 chrome_launcher 使用）

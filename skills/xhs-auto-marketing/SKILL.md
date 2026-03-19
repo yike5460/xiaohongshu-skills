@@ -30,7 +30,7 @@ metadata:
 全自动评论有较高封号风险。本技能已内置以下保护机制，但不能完全避免：
 
 - 每日评论上限（默认 15 条）
-- 评论间隔 3-8 分钟随机
+- 评论间隔 1.5-3 分钟随机
 - 混入纯互动评论（推广:互动 ≈ 7:3）
 - 活跃时间窗口（北京时间 8:00-20:00）
 - 连续失败 3 次触发熔断（暂停 24 小时）
@@ -53,6 +53,7 @@ DISPLAY=:99 python scripts/auto_marketing.py \
   --promo-info "aifunding是一个AI创业融资平台" \
   --max-notes 8 \
   --max-per-keyword 3 \
+  --max-keywords 2 \
   --daily-limit 15 \
   --promo-ratio 0.7 \
   [--account ACCOUNT_NAME] \
@@ -68,6 +69,7 @@ DISPLAY=:99 python scripts/auto_marketing.py \
 | `--promo-info` | ✅ | - | 宣发信息描述 |
 | `--max-notes` | ❌ | 8 | 本轮最多处理笔记数 |
 | `--max-per-keyword` | ❌ | 3 | 每个关键词最多处理数 |
+| `--max-keywords` | ❌ | 2 | 本轮最多处理关键词数（从列表随机选取） |
 | `--daily-limit` | ❌ | 15 | 每日评论上限 |
 | `--promo-ratio` | ❌ | 0.7 | 推广评论占比(0-1) |
 | `--proxy` | ❌ | "" | 代理地址(socks5://或http://) |
@@ -108,9 +110,9 @@ DISPLAY=:99 python scripts/auto_marketing.py \
 使用 `openclaw cron` 设置定时执行，推荐配置：
 
 - 每天 3-4 次，分布在高峰时段
-- 每次处理 3-5 条
+- 每次处理 3-5 条（每次 2 个关键词）
 - 每日总量不超过 15 条
-- **超时设置：`--timeout-seconds 3600`（1小时）**——脚本内置 3-8 分钟随机延迟，5 个关键词预计需要 50+ 分钟，默认超时会导致任务被终止
+- **超时设置：`--timeout-seconds 1800`（30分钟）**——缩短评论间隔至 1.5-3 分钟 + 限制 2 个关键词，单次 cron 约 15-25 分钟
 
 ## 失败处理
 
