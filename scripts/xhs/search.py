@@ -100,8 +100,10 @@ def search_feeds(
         ValueError: 筛选选项无效。
     """
     # 优先通过搜索框 UI 搜索（反风控）
+    used_searchbox = False
     if _search_via_searchbox(page, keyword):
         logger.info("通过搜索框 UI 完成搜索")
+        used_searchbox = True
     else:
         # 回退到 URL 方式
         logger.warning("搜索框不可用，回退到 URL 方式")
@@ -121,6 +123,23 @@ def search_feeds(
 
     # 提取搜索结果
     result = page.evaluate(_EXTRACT_SEARCH_JS)
+
+    # 如果搜索框方式没有获取到结果，回退到 URL 方式重试
+    if (not result or result == "[]" or json.loads(result) == []) and used_searchbox:
+        logger.warning("搜索框方式未获取到结果，回退到 URL 方式重试")
+        search_url = make_search_url(keyword)
+        page.navigate(search_url)
+        page.wait_for_load()
+        page.wait_dom_stable()
+        _wait_for_initial_state(page)
+
+        if filter_option:
+            internal_filters = _convert_filters(filter_option)
+            if internal_filters:
+                _apply_filters(page, internal_filters)
+
+        result = page.evaluate(_EXTRACT_SEARCH_JS)
+
     if not result:
         raise NoFeedsError()
 
@@ -167,11 +186,10 @@ def _search_via_searchbox(page: Page, keyword: str) -> bool:
     })
     sleep_random(200, 400)
 
-    # 逐字输入
+    # 输入关键词（使用 insertText 支持中文/CJK 字符）
     import random as _random
     for char in keyword:
-        page._send_session("Input.dispatchKeyEvent", {"type": "keyDown", "text": char})
-        page._send_session("Input.dispatchKeyEvent", {"type": "keyUp", "text": char})
+        page._send_session("Input.insertText", {"text": char})
         time.sleep(_random.uniform(0.05, 0.12))
 
     sleep_random(300, 600)
