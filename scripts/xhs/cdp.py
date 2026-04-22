@@ -867,13 +867,15 @@ class Browser:
         import contextlib
 
         if self._cdp:
-            with contextlib.suppress(CDPError):
+            with contextlib.suppress(CDPError, Exception):
                 self._cdp.send("Target.closeTarget", {"targetId": page.target_id})
 
     def close(self) -> None:
         """关闭连接。"""
+        import contextlib
         if self._cdp:
-            self._cdp.close()
+            with contextlib.suppress(Exception):
+                self._cdp.close()
             self._cdp = None
 
     def reconnect(self) -> None:
