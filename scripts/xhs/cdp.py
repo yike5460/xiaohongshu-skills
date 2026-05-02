@@ -201,7 +201,7 @@ class Page:
     @staticmethod
     def _is_connection_error(exc: Exception) -> bool:
         """判断是否为 WebSocket 连接断开异常（可通过重连恢复）。"""
-        return isinstance(
+        if isinstance(
             exc,
             (
                 ConnectionError,
@@ -212,25 +212,49 @@ class Page:
                 ws_exc.ConnectionClosedOK,
                 ws_exc.InvalidState,
             ),
-        )
+        ):
+            return True
+        # CDP-level session invalidation (e.g. renderer crash / tab closed)
+        err_str = str(exc)
+        if "Session with given id not found" in err_str or "Target closed" in err_str:
+            return True
+        return False
 
     def navigate(self, url: str) -> None:
         """导航到指定 URL。"""
         logger.info("导航到: %s", url)
         self._send_session("Page.navigate", {"url": url})
 
-    def wait_for_load(self, timeout: float = 60.0) -> None:
-        """等待页面加载完成（通过轮询 document.readyState）。"""
+    def wait_for_load(self, timeout: float = 90.0) -> None:
+        """等待页面加载完成（通过轮询 document.readyState）。
+
+        High-engagement XHS pages with many comments and images can take
+        significantly longer to reach "complete" state. We use 90s as the
+        default (up from 60s) and also accept "interactive" after 30s as
+        a fallback — the DOM is ready for inspection at that point even
+        if subresources are still loading.
+        """
+        interactive_deadline = time.monotonic() + min(30.0, timeout * 0.4)
         deadline = time.monotonic() + timeout
+        saw_interactive = False
         while time.monotonic() < deadline:
             try:
                 state = self.evaluate("document.readyState")
                 if state == "complete":
                     return
+                if state == "interactive":
+                    saw_interactive = True
+                    # After waiting long enough, accept "interactive" as good enough
+                    if time.monotonic() > interactive_deadline:
+                        logger.info("页面处于 interactive 状态（超过 30s），继续执行")
+                        return
             except CDPError:
                 pass
             time.sleep(0.5)
-        logger.warning("等待页面加载超时")
+        if saw_interactive:
+            logger.warning("页面未达到 complete 但已 interactive，强制继续")
+            return
+        raise CDPError(f"等待页面加载超时 ({timeout}s), readyState 未达到 interactive/complete")
 
     def wait_dom_stable(self, timeout: float = 10.0, interval: float = 0.5) -> None:
         """等待 DOM 稳定（连续两次 DOM 快照一致）。"""

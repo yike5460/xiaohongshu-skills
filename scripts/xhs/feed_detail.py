@@ -106,32 +106,107 @@ def get_feed_detail(
         config.scroll_speed,
     )
 
-    # 导航（含重试）
-    for attempt in range(3):
-        try:
-            page.navigate(url)
-            page.wait_for_load()
-            page.wait_dom_stable()
-            break
-        except Exception as e:
-            logger.debug("页面导航重试 #%d: %s", attempt, e)
-            time.sleep(0.5 + random.random())
-    else:
-        raise RuntimeError("页面导航失败")
+    # 导航（含重试），遇到 session 失效时自动刷新 tab
+    from .errors import CDPError
+
+    page = _navigate_with_recovery(page, url)
 
     sleep_random(800, 1500)
 
     # 检查页面可访问性（扫码验证时自动等待重试）
     _check_page_accessible(page, url)
 
-    # 加载全部评论
+    # 先提取详情数据（在滚动加载评论之前，__INITIAL_STATE__ 数据最完整）
+    initial_detail = _extract_feed_detail(page, feed_id)
+
+    # 加载更多评论
     if load_all_comments:
         try:
             _load_all_comments(page, config)
         except Exception as e:
-            logger.warning("加载全部评论失败: %s", e)
+            logger.warning("加载更多评论失败: %s", e)
 
-    return _extract_feed_detail(page, feed_id)
+    # 尝试重新提取（滚动后 __INITIAL_STATE__ 可能包含更多评论）
+    # 如果重新提取失败（滚动导致页面状态变化），回退到初始提取的数据
+    if load_all_comments:
+        try:
+            refreshed_detail = _extract_feed_detail(page, feed_id)
+            # 如果刷新后的评论更多，使用刷新后的数据
+            if (refreshed_detail.comments and initial_detail.comments and
+                    len(refreshed_detail.comments.comments) >= len(initial_detail.comments.comments)):
+                return refreshed_detail
+        except Exception:
+            logger.info("滚动后重新提取详情失败，使用初始提取的数据")
+
+    return initial_detail
+
+
+def _navigate_with_recovery(page: Page, url: str, max_retries: int = 3) -> Page:
+    """导航到 URL，遇到 session 失效/页面崩溃时自动恢复。
+
+    Recovery strategy:
+    1. First retry: simple re-navigate on the same page
+    2. Second retry: reconnect CDP + re-attach to target
+    3. Third retry: close dead tab, create fresh tab via Browser
+
+    Returns the (possibly new) Page object.
+    """
+    from .errors import CDPError, CDPConnectionError
+
+    for attempt in range(max_retries):
+        try:
+            page.navigate(url)
+            page.wait_for_load(timeout=90.0)  # 高互动帖子加载更慢，延长到 90s
+            page.wait_dom_stable()
+            return page
+        except Exception as e:
+            err_str = str(e)
+            is_session_gone = (
+                "Session with given id not found" in err_str
+                or "Target closed" in err_str
+                or isinstance(e, CDPConnectionError)
+            )
+            is_timeout = "超时" in err_str or "timeout" in err_str.lower()
+
+            logger.warning(
+                "页面导航失败 (attempt %d/%d): %s [session_gone=%s, timeout=%s]",
+                attempt + 1, max_retries, e, is_session_gone, is_timeout,
+            )
+
+            if attempt >= max_retries - 1:
+                raise RuntimeError(f"页面导航在 {max_retries} 次重试后仍然失败: {e}") from e
+
+            # Recovery based on failure type
+            if is_session_gone and page._browser:
+                # Session/target is dead — create a fresh tab
+                logger.info("CDP session 已失效，创建新 tab 重试...")
+                try:
+                    page._browser.close_page(page)
+                except Exception:
+                    pass  # tab might already be gone
+                page = page._browser.get_or_create_page()
+                time.sleep(1.0 + random.random())
+            elif is_timeout and page._browser:
+                # Page loaded too slowly — try reconnecting first, then fresh tab
+                logger.info("页面加载超时，尝试重连 CDP session...")
+                try:
+                    page._browser._reconnect_page(page)
+                    time.sleep(0.5)
+                    # Verify the page is still responsive
+                    page.evaluate("1")
+                except Exception as reconnect_err:
+                    logger.warning("重连失败 (%s)，创建新 tab...", reconnect_err)
+                    try:
+                        page._browser.close_page(page)
+                    except Exception:
+                        pass
+                    page = page._browser.get_or_create_page()
+                time.sleep(1.0 + random.random())
+            else:
+                # Generic retry with backoff
+                time.sleep(1.0 + random.random() * 2)
+
+    return page  # unreachable but makes type checkers happy
 
 
 # ========== 页面检查 ==========
